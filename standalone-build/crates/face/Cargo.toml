@@ -10,3 +10,7 @@ android_hardware_biometrics_common = { path = "../biometrics-common" }
 android_hardware_common = { path = "../hardware-common" }
 android_hardware_keymaster = { path = "../keymaster" }
 nativewindow = { package = "android-nativewindow-surface", path = "../nativewindow" }
+
+[[bin]]
+name = "iface_client"
+path = "src/bin/iface_client.rs"

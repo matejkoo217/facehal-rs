@@ -5,11 +5,20 @@
 #include <algorithm>
 #include <cstddef>
 #include <cstdint>
+#include <mutex>
 
 namespace {
 
 constexpr int32_t kInvalidArgument = -1;
 constexpr int32_t kWindowError = -2;
+
+// ANativeWindow_setBuffersGeometry is expensive (it renegotiates the BLAST
+// transaction / buffer allocation) and must not be issued per frame. Remember the
+// geometry already programmed for the current window and only set it on change.
+std::mutex g_geometryMutex;
+const void* g_geometryWindow = nullptr;
+int32_t g_geometryWidth = 0;
+int32_t g_geometryHeight = 0;
 
 uint8_t clampByte(int32_t value) {
     return static_cast<uint8_t>(std::clamp(value, 0, 255));
@@ -111,7 +120,7 @@ bool writeBuffer(
 
 extern "C" int32_t facehal_preview_render_nv21(
         void* window, const uint8_t* frame, size_t frameSize, int32_t width, int32_t height,
-        int32_t sensorOrientation, int32_t configureWindow) {
+        int32_t sensorOrientation) {
     if (window == nullptr || frame == nullptr || width <= 0 || height <= 0 || (width & 1) != 0 ||
         (height & 1) != 0 ||
         (sensorOrientation != 0 && sensorOrientation != 90 && sensorOrientation != 180 &&
@@ -121,21 +130,32 @@ extern "C" int32_t facehal_preview_render_nv21(
     auto* nativeWindow = static_cast<ANativeWindow*>(window);
     const int32_t bufferWidth = sensorOrientation == 90 || sensorOrientation == 270 ? height : width;
     const int32_t bufferHeight = sensorOrientation == 90 || sensorOrientation == 270 ? width : height;
-    int32_t status = 0;
-    // Reconfiguring a SurfaceView buffer queue for every frame can freeze previews on
-    // older vendor graphics stacks. Configure it once, then only lock/post new buffers.
-    if (configureWindow != 0) {
-        status = ANativeWindow_setBuffersGeometry(
-                nativeWindow, bufferWidth, bufferHeight, WINDOW_FORMAT_RGBA_8888);
-        if (status != 0) {
-            status = ANativeWindow_setBuffersGeometry(nativeWindow, 0, 0, WINDOW_FORMAT_RGBA_8888);
-        }
-        if (status != 0) {
-            return status < 0 ? status : kWindowError;
+    {
+        std::lock_guard<std::mutex> guard(g_geometryMutex);
+        if (g_geometryWindow != window || g_geometryWidth != bufferWidth ||
+            g_geometryHeight != bufferHeight) {
+            int32_t status = ANativeWindow_setBuffersGeometry(
+                    nativeWindow, bufferWidth, bufferHeight, WINDOW_FORMAT_RGBA_8888);
+            if (status != 0) {
+                status = ANativeWindow_setBuffersGeometry(
+                        nativeWindow, 0, 0, WINDOW_FORMAT_RGBA_8888);
+            }
+            if (status != 0) {
+                return status < 0 ? status : kWindowError;
+            }
+            g_geometryWindow = window;
+            g_geometryWidth = bufferWidth;
+            g_geometryHeight = bufferHeight;
         }
     }
     ANativeWindow_Buffer buffer{};
-    status = ANativeWindow_lock(nativeWindow, &buffer, nullptr);
+    int32_t status = ANativeWindow_lock(nativeWindow, &buffer, nullptr);
+    if (status != 0) {
+        const int32_t resetStatus = ANativeWindow_setBuffersGeometry(nativeWindow, 0, 0, 0);
+        if (resetStatus == 0) {
+            status = ANativeWindow_lock(nativeWindow, &buffer, nullptr);
+        }
+    }
     if (status != 0) {
         return status < 0 ? status : kWindowError;
     }

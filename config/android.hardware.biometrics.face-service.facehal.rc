@@ -4,6 +4,7 @@ service vendor.facehal /vendor/bin/hw/android.hardware.biometrics.face-service.f
     group system camera input graphics root
     setenv LD_LIBRARY_PATH /vendor/lib64
     disabled
+    seclabel u:r:hal_face_default:s0
 
 on post-fs-data
     mkdir /data/vendor_de/0/facedata 0770 system system encryption=None
